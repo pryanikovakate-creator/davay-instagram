@@ -1,0 +1,51 @@
+name: Публикация в Инстаграм
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # каждый час в :07 по UTC
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Что сделать"
+        type: choice
+        options: [publish, check, dry-run]
+        default: check
+
+permissions:
+  contents: write
+
+concurrency:
+  group: instagram-publish
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить ключ доступа
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check'
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+        run: python3 publisher/publish.py --check
+
+      - name: Опубликовать посты, которым пришло время
+        if: github.event_name == 'schedule' || inputs.mode != 'check'
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          REPO_RAW_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
+          DRY_RUN: ${{ inputs.mode == 'dry-run' && '1' || '0' }}
+        run: python3 publisher/publish.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Сохранить, что опубликовано
+        if: github.event_name == 'schedule' || inputs.mode == 'publish'
+        run: |
+          if [ -n "$(git status --porcelain posts)" ]; then
+            git config user.name "davay-publisher"
+            git config user.email "davay-publisher@users.noreply.github.com"
+            git add -A posts
+            git commit -m "Публикация: $(date -u +%Y-%m-%dT%H:%MZ)"
+            git pull --rebase
+            git push
+          fi
