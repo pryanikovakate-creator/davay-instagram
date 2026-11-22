@@ -34,7 +34,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POSTS = ROOT / "posts"
 QUEUE, PUBLISHED, FAILED = POSTS / "queue", POSTS / "published", POSTS / "failed"
-API = (os.environ.get("IG_API_BASE") or "https://graph.facebook.com/v22.0").rstrip("/")
+def _pick_api():
+    """Ключи Instagram Login начинаются с «IG» и работают через graph.instagram.com,
+    ключи «единого входа» Meta (EAA…) — через graph.facebook.com."""
+    if os.environ.get("IG_API_BASE"):
+        return os.environ["IG_API_BASE"]
+    if os.environ.get("IG_TOKEN", "").strip().startswith("IG"):
+        return "https://graph.instagram.com/v22.0"
+    return "https://graph.facebook.com/v22.0"
+
+
+API = _pick_api().rstrip("/")
+IG_LOGIN = "graph.instagram.com" in API or os.environ.get("IG_TOKEN", "").strip().startswith("IG")
 MAX_ATTEMPTS = 3
 CAPTION_LIMIT = 2200
 MAX_HASHTAGS = 30
@@ -49,7 +60,7 @@ def call(method, path, params=None, token=None):
     params = dict(params or {})
     if token:
         params["access_token"] = token
-    url = f"{API}/{path.lstrip('/')}"
+    url = path if path.startswith("http") else f"{API}/{path.lstrip('/')}"
     data = None
     if method == "GET":
         url += "?" + urllib.parse.urlencode(params)
@@ -76,7 +87,7 @@ def account(token):
     if fixed:
         info = call("GET", fixed, {"fields": "id,username"}, token)
         return info.get("id", fixed), info.get("username", "?")
-    if "graph.instagram.com" in API:
+    if IG_LOGIN:
         me = call("GET", "me", {"fields": "user_id,username"}, token)
         if "user_id" in me:
             return me["user_id"], me.get("username", "?")
@@ -84,9 +95,9 @@ def account(token):
     # Ключ системного пользователя (единый вход Meta)
     try:
         r = call("GET", "me/assigned_instagram_accounts", {"fields": "id,username"}, token)
-        if r.get("data"):
-            a = r["data"][0]
-            return a["id"], a.get("username", "?")
+        accs = [a for a in r.get("data", []) if a.get("id")]
+        if accs:
+            return accs[0]["id"], accs[0].get("username", "?")
     except ApiError:
         pass
     r = call("GET", "me/accounts", {"fields": "instagram_business_account{id,username}"}, token)
@@ -242,10 +253,12 @@ def main(argv):
         print(f"Ключ работает. Аккаунт: @{username}. Лимит публикаций: {json.dumps(lim, ensure_ascii=False)}")
         return 0
     if "--refresh" in argv:
-        if "graph.instagram.com" not in API:
-            print("Ключ системного пользователя бессрочный — продлевать не нужно.", file=sys.stderr)
+        if not IG_LOGIN:
+            print("Этот ключ бессрочный — продлевать не нужно.", file=sys.stderr)
             return 2
-        r = call("GET", "refresh_access_token", {"grant_type": "ig_refresh_token"}, token)
+        p = urllib.parse.urlparse(API)
+        base = f"{p.scheme}://{p.netloc}"   # продление работает без номера версии
+        r = call("GET", base + "/refresh_access_token", {"grant_type": "ig_refresh_token"}, token)
         new = r.get("access_token")
         if not new:
             raise ApiError(f"не удалось продлить ключ: {r}")

@@ -1,11 +1,10 @@
 name: Продление ключа Инстаграма
 
-# Нужно только для старых ключей Instagram Login (живут 60 дней).
-# Ключ «единого входа» Meta бессрочный, поэтому расписание выключено.
-# Если когда-нибудь понадобится — верните блок schedule:
-#   schedule:
-#     - cron: "0 6 1,15 * *"
+# Ключи Instagram Login (начинаются с «IG») живут 60 дней — продлеваем 1-го и 15-го.
+# Бессрочные ключи Meta (EAA…) продлевать не нужно: задача просто завершится.
 on:
+  schedule:
+    - cron: "0 6 1,15 * *"
   workflow_dispatch:
 
 jobs:
@@ -18,7 +17,15 @@ jobs:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          set +e
           NEW=$(python3 publisher/publish.py --refresh)
+          code=$?
+          set -e
+          if [ "$code" = "2" ]; then echo "Ключ бессрочный, продлевать не нужно." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          if [ "$code" != "0" ]; then exit "$code"; fi
           echo "::add-mask::$NEW"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Нет секрета GH_PAT — не могу сохранить продлённый ключ. Добавьте его по инструкции (шаг 4)." >> "$GITHUB_STEP_SUMMARY"; exit 1
+          fi
           gh secret set IG_TOKEN --repo "${{ github.repository }}" --body "$NEW"
           echo "Ключ продлён и сохранён." >> "$GITHUB_STEP_SUMMARY"
