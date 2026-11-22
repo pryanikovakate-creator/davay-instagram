@@ -28,12 +28,14 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check'
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
         run: python3 publisher/publish.py --check
 
       - name: Опубликовать посты, которым пришло время
         if: github.event_name == 'schedule' || inputs.mode != 'check'
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
           REPO_RAW_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
           DRY_RUN: ${{ inputs.mode == 'dry-run' && '1' || '0' }}
         run: python3 publisher/publish.py | tee -a "$GITHUB_STEP_SUMMARY"

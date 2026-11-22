@@ -14,7 +14,10 @@ Instagram API (Instagram API with Instagram Login).
   IG_TOKEN       — ключ доступа (long-lived token) из кабинета разработчика Meta
   REPO_RAW_BASE  — адрес, по которому Инстаграм скачает картинки, например
                    https://raw.githubusercontent.com/<логин>/<репозиторий>/<коммит>
-  IG_API_BASE    — адрес API (по умолчанию https://graph.instagram.com)
+  IG_API_BASE    — адрес API (по умолчанию https://graph.facebook.com/v22.0 — для ключа
+                   «единого входа» Meta; для старых ключей Instagram Login —
+                   https://graph.instagram.com)
+  IG_USER_ID     — номер аккаунта Инстаграма (необязательно: программа найдёт его сама)
   DRY_RUN=1      — ничего не отправлять, только показать, что было бы опубликовано
 """
 import json
@@ -31,7 +34,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POSTS = ROOT / "posts"
 QUEUE, PUBLISHED, FAILED = POSTS / "queue", POSTS / "published", POSTS / "failed"
-API = os.environ.get("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
+API = (os.environ.get("IG_API_BASE") or "https://graph.facebook.com/v22.0").rstrip("/")
 MAX_ATTEMPTS = 3
 CAPTION_LIMIT = 2200
 MAX_HASHTAGS = 30
@@ -68,10 +71,31 @@ def call(method, path, params=None, token=None):
 
 
 def account(token):
-    me = call("GET", "me", {"fields": "user_id,username"}, token)
-    if "user_id" not in me:
+    """Находим аккаунт Инстаграма, от имени которого публикуем: (id, username)."""
+    fixed = os.environ.get("IG_USER_ID", "").strip()
+    if fixed:
+        info = call("GET", fixed, {"fields": "id,username"}, token)
+        return info.get("id", fixed), info.get("username", "?")
+    if "graph.instagram.com" in API:
+        me = call("GET", "me", {"fields": "user_id,username"}, token)
+        if "user_id" in me:
+            return me["user_id"], me.get("username", "?")
         raise ApiError(f"API не вернул user_id: {me}")
-    return me["user_id"], me.get("username", "?")
+    # Ключ системного пользователя (единый вход Meta)
+    try:
+        r = call("GET", "me/assigned_instagram_accounts", {"fields": "id,username"}, token)
+        if r.get("data"):
+            a = r["data"][0]
+            return a["id"], a.get("username", "?")
+    except ApiError:
+        pass
+    r = call("GET", "me/accounts", {"fields": "instagram_business_account{id,username}"}, token)
+    for page in r.get("data", []):
+        a = page.get("instagram_business_account")
+        if a:
+            return a["id"], a.get("username", "?")
+    raise ApiError("ключ работает, но к нему не привязан аккаунт Инстаграма. "
+                   "Проверьте, что в конфигурации выбран аккаунт «Давай узнаем»")
 
 
 def wait_ready(container_id, token, tries=20, pause=3):
@@ -218,6 +242,9 @@ def main(argv):
         print(f"Ключ работает. Аккаунт: @{username}. Лимит публикаций: {json.dumps(lim, ensure_ascii=False)}")
         return 0
     if "--refresh" in argv:
+        if "graph.instagram.com" not in API:
+            print("Ключ системного пользователя бессрочный — продлевать не нужно.", file=sys.stderr)
+            return 2
         r = call("GET", "refresh_access_token", {"grant_type": "ig_refresh_token"}, token)
         new = r.get("access_token")
         if not new:
