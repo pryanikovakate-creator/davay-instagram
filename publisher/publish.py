@@ -125,21 +125,31 @@ def wait_ready(container_id, token, tries=20, pause=3):
 def load_post(folder):
     meta = json.loads((folder / "post.json").read_text(encoding="utf-8"))
     kind = meta.get("type", "feed")
-    images = meta.get("images") or sorted(p.name for p in folder.glob("*.jpg"))
     problems = []
-    if kind not in ("feed", "story"):
-        problems.append(f"неизвестный type «{kind}» (нужно feed или story)")
-    if not images:
-        problems.append("нет картинок .jpg")
-    for name in images:
-        if not name.lower().endswith((".jpg", ".jpeg")):
-            problems.append(f"{name}: Инстаграм принимает только JPG")
-        elif not (folder / name).exists():
-            problems.append(f"{name}: файла нет в папке")
-    if kind == "feed" and len(images) > 10:
-        problems.append("в карусели не больше 10 картинок")
-    if kind == "story" and len(images) != 1:
-        problems.append("в сторис ровно одна картинка")
+    if kind == "reel":
+        images = meta.get("video") and [meta["video"]] or sorted(p.name for p in folder.glob("*.mp4"))[:1]
+        if not images:
+            problems.append("нет видео .mp4")
+        for name in images:
+            if not name.lower().endswith((".mp4", ".mov")):
+                problems.append(f"{name}: для рилса нужно видео MP4")
+            elif not (folder / name).exists():
+                problems.append(f"{name}: файла нет в папке")
+    else:
+        images = meta.get("images") or sorted(p.name for p in folder.glob("*.jpg"))
+        if kind not in ("feed", "story"):
+            problems.append(f"неизвестный type «{kind}» (нужно feed, story или reel)")
+        if not images:
+            problems.append("нет картинок .jpg")
+        for name in images:
+            if not name.lower().endswith((".jpg", ".jpeg")):
+                problems.append(f"{name}: Инстаграм принимает только JPG")
+            elif not (folder / name).exists():
+                problems.append(f"{name}: файла нет в папке")
+        if kind == "feed" and len(images) > 10:
+            problems.append("в карусели не больше 10 картинок")
+        if kind == "story" and len(images) != 1:
+            problems.append("в сторис ровно одна картинка")
     caption = meta.get("caption", "")
     if len(caption) > CAPTION_LIMIT:
         problems.append(f"подпись длиннее {CAPTION_LIMIT} знаков")
@@ -159,7 +169,13 @@ def publish(folder, token, ig_id, raw_base):
     meta, kind, images, caption, _, _ = load_post(folder)
     rel = folder.relative_to(ROOT).as_posix()
     urls = [f"{raw_base}/{urllib.parse.quote(rel)}/{urllib.parse.quote(n)}" for n in images]
-    if kind == "story":
+    if kind == "reel":
+        params = {"media_type": "REELS", "video_url": urls[0], "caption": caption, "share_to_feed": "true"}
+        if meta.get("thumb_offset_ms") is not None:
+            params["thumb_offset"] = str(int(meta["thumb_offset_ms"]))
+        c = call("POST", f"{ig_id}/media", params, token)["id"]
+        wait_ready(c, token, tries=60, pause=10)   # видео обрабатывается дольше, до 10 минут
+    elif kind == "story":
         c = call("POST", f"{ig_id}/media", {"image_url": urls[0], "media_type": "STORIES"}, token)["id"]
     elif len(urls) == 1:
         c = call("POST", f"{ig_id}/media", {"image_url": urls[0], "caption": caption}, token)["id"]
