@@ -2,7 +2,7 @@ name: Публикация в Инстаграм
 
 on:
   schedule:
-    - cron: "7 * * * *"   # каждый час в :07 по UTC
+    - cron: "*/15 * * * *"   # каждые 15 минут (GitHub может запускать с задержкой)
   workflow_dispatch:
     inputs:
       mode:
